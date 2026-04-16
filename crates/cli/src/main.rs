@@ -40,7 +40,7 @@ enum Commands {
         tier: String,
 
         /// Format: claude-md, json, yaml, plain-text
-        #[arg(short, long, default_value = "claude-md")]
+        #[arg(long, default_value = "claude-md")]
         format: String,
 
         /// Owner
@@ -48,7 +48,7 @@ enum Commands {
         owner: String,
 
         /// Path to the context file
-        #[arg(short = 'f', long)]
+        #[arg(short, long)]
         file: String,
 
         /// Author name
