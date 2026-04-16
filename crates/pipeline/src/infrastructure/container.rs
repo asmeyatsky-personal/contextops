@@ -31,11 +31,11 @@ impl PipelineContainer {
 
         let validator = Arc::new(PassthroughSchemaValidator::new());
 
-        // Build stage executors
+        // Build stage executors — wired to real ports
         let executors: Vec<Arc<dyn StageExecutorPort>> = vec![
             Arc::new(ValidateStageExecutor::new(validator)),
-            Arc::new(BlastRadiusStageExecutor),
-            Arc::new(RegressionTestStageExecutor),
+            Arc::new(BlastRadiusStageExecutor::new(artifact_repo.clone())),
+            Arc::new(RegressionTestStageExecutor::new(artifact_repo.clone())),
             Arc::new(SecurityScanStageExecutor),
             Arc::new(PromoteStagingExecutor),
             Arc::new(PromoteProductionExecutor),

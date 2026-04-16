@@ -25,7 +25,6 @@ impl ResolveContextQuery {
         let repo2 = self.repository.clone();
         let repo3 = self.repository.clone();
 
-        let _ns_org = namespace.to_string();
         let ns_team = namespace.to_string();
         let ns_project = namespace.to_string();
 

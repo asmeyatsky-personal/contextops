@@ -362,6 +362,49 @@ impl ContextOpsMcpServer {
                 },
                 Err(_) => JsonRpcResponse::error(id, -32602, "Invalid run ID".into()),
             }
+        } else if uri.starts_with("contextops://search") {
+            // Extract query parameter from URI
+            let query = uri
+                .split("q=")
+                .nth(1)
+                .unwrap_or("")
+                .split('&')
+                .next()
+                .unwrap_or("");
+
+            if query.is_empty() {
+                return JsonRpcResponse::error(id, -32602, "Search query 'q' parameter is required".into());
+            }
+
+            match self.search_artifacts.search(query, None, 20).await {
+                Ok(results) => {
+                    let search_results: Vec<serde_json::Value> = results
+                        .iter()
+                        .map(|r| {
+                            serde_json::json!({
+                                "artifact_id": r.artifact_id.to_string(),
+                                "name": r.name,
+                                "namespace": r.namespace,
+                                "tier": format!("{}", r.tier),
+                                "score": r.score,
+                                "snippet": r.snippet,
+                            })
+                        })
+                        .collect();
+
+                    JsonRpcResponse::success(
+                        id,
+                        serde_json::json!({
+                            "contents": [{
+                                "uri": uri,
+                                "mimeType": "application/json",
+                                "text": serde_json::to_string_pretty(&search_results).unwrap()
+                            }]
+                        }),
+                    )
+                }
+                Err(e) => JsonRpcResponse::error(id, -32000, e.to_string()),
+            }
         } else {
             JsonRpcResponse::error(id, -32602, format!("Unknown resource URI: {uri}"))
         }

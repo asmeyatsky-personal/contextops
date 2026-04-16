@@ -28,6 +28,7 @@ impl DagOrchestrator {
     }
 
     /// Execute a pipeline, running independent stages concurrently.
+    /// All state transitions use immutable move semantics.
     pub async fn execute(
         &self,
         pipeline: &Pipeline,
@@ -86,10 +87,10 @@ impl DagOrchestrator {
                 match exec_result {
                     Ok(output) => {
                         accumulated_results.insert(stage_name.clone(), output.clone());
-                        run.record_stage_success(stage_name, duration_ms, output);
+                        run = run.record_stage_success(stage_name, duration_ms, output);
                     }
                     Err(err) => {
-                        run.record_stage_failure(stage_name.clone(), duration_ms, err.to_string());
+                        run = run.record_stage_failure(stage_name.clone(), duration_ms, err.to_string());
                         if required {
                             level_failed = true;
                         }
@@ -98,12 +99,12 @@ impl DagOrchestrator {
             }
 
             if level_failed {
-                run.fail();
+                run = run.fail();
                 return Ok(run);
             }
         }
 
-        run.complete();
+        run = run.complete();
         Ok(run)
     }
 }
@@ -148,6 +149,25 @@ mod tests {
             Err(StageExecutorError::QualityGateFailed {
                 violations: vec!["test failure".into()],
             })
+        }
+    }
+
+    struct ResultTrackingExecutor {
+        kind: StageKind,
+    }
+
+    #[async_trait]
+    impl StageExecutorPort for ResultTrackingExecutor {
+        fn stage_kind(&self) -> StageKind {
+            self.kind
+        }
+
+        async fn execute(&self, ctx: &StageContext) -> Result<serde_json::Value, StageExecutorError> {
+            // Return previous results so the test can verify accumulation
+            Ok(serde_json::json!({
+                "stage": format!("{:?}", self.kind),
+                "received_previous": ctx.previous_results.len(),
+            }))
         }
     }
 
@@ -202,6 +222,7 @@ mod tests {
         let run = orchestrator.execute(&pipeline, make_context()).await.unwrap();
         assert_eq!(run.status(), crate::domain::entities::RunStatus::Succeeded);
         assert_eq!(call_count.load(Ordering::SeqCst), 2);
+        assert_eq!(run.stage_results().len(), 2);
     }
 
     #[tokio::test]
@@ -226,5 +247,94 @@ mod tests {
 
         let run = orchestrator.execute(&pipeline, make_context()).await.unwrap();
         assert_eq!(run.status(), crate::domain::entities::RunStatus::Failed);
+        assert_eq!(run.stage_results().len(), 1);
+        assert!(run.stage_results()[0].error.is_some());
+    }
+
+    #[tokio::test]
+    async fn orchestrator_continues_on_optional_stage_failure() {
+        let pipeline = Pipeline::new(
+            "test".into(),
+            "".into(),
+            vec![
+                PipelineStage {
+                    name: "validate".into(),
+                    kind: StageKind::Validate,
+                    depends_on: vec![],
+                    timeout_seconds: 60,
+                    required: false, // optional
+                },
+                PipelineStage {
+                    name: "scan".into(),
+                    kind: StageKind::SecurityScan,
+                    depends_on: vec!["validate".into()],
+                    timeout_seconds: 60,
+                    required: true,
+                },
+            ],
+            "user".into(),
+        )
+        .unwrap();
+
+        let orchestrator = DagOrchestrator::new(vec![
+            Arc::new(FailingExecutor {
+                kind: StageKind::Validate,
+            }),
+            Arc::new(MockExecutor {
+                kind: StageKind::SecurityScan,
+                call_count: Arc::new(AtomicUsize::new(0)),
+            }),
+        ]);
+
+        let run = orchestrator.execute(&pipeline, make_context()).await.unwrap();
+        // Pipeline succeeds because the failing stage was optional
+        assert_eq!(run.status(), crate::domain::entities::RunStatus::Succeeded);
+        assert_eq!(run.stage_results().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn orchestrator_accumulates_stage_results_for_downstream() {
+        let pipeline = Pipeline::new(
+            "test".into(),
+            "".into(),
+            vec![
+                PipelineStage {
+                    name: "validate".into(),
+                    kind: StageKind::Validate,
+                    depends_on: vec![],
+                    timeout_seconds: 60,
+                    required: true,
+                },
+                PipelineStage {
+                    name: "scan".into(),
+                    kind: StageKind::SecurityScan,
+                    depends_on: vec!["validate".into()],
+                    timeout_seconds: 60,
+                    required: true,
+                },
+            ],
+            "user".into(),
+        )
+        .unwrap();
+
+        let orchestrator = DagOrchestrator::new(vec![
+            Arc::new(ResultTrackingExecutor {
+                kind: StageKind::Validate,
+            }),
+            Arc::new(ResultTrackingExecutor {
+                kind: StageKind::SecurityScan,
+            }),
+        ]);
+
+        let run = orchestrator.execute(&pipeline, make_context()).await.unwrap();
+        assert_eq!(run.status(), crate::domain::entities::RunStatus::Succeeded);
+
+        // First stage should have received 0 previous results
+        let validate_output = &run.stage_results()[0].output;
+        assert_eq!(validate_output["received_previous"], 0);
+
+        // Second stage should have received 1 previous result (from validate)
+        let scan_output = &run.stage_results()[1].output;
+        assert_eq!(scan_output["received_previous"], 1);
     }
 }

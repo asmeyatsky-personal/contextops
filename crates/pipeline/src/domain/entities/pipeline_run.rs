@@ -50,11 +50,14 @@ pub struct StageResult {
     pub error: Option<String>,
 }
 
-/// A pipeline run — mutable execution state for a pipeline.
+/// A pipeline run — immutable execution state for a pipeline.
 ///
 /// Tracks which stages have completed, their results, and the
 /// overall run status. Domain events are collected for each
 /// state transition.
+///
+/// Immutable domain model: all state changes return new instances
+/// via move semantics (mut self -> Self).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineRun {
     id: Uuid,
@@ -97,13 +100,13 @@ impl PipelineRun {
         }
     }
 
-    /// Record a stage completion.
+    /// Record a stage completion. Returns a new instance.
     pub fn record_stage_success(
-        &mut self,
+        mut self,
         stage_name: String,
         duration_ms: u64,
         output: serde_json::Value,
-    ) {
+    ) -> Self {
         self.stage_results.push(StageResult {
             stage_name: stage_name.clone(),
             status: StageStatus::Succeeded,
@@ -119,15 +122,16 @@ impl PipelineRun {
             status: "succeeded".into(),
             duration_ms,
         });
+        self
     }
 
-    /// Record a stage failure.
+    /// Record a stage failure. Returns a new instance.
     pub fn record_stage_failure(
-        &mut self,
+        mut self,
         stage_name: String,
         duration_ms: u64,
         error: String,
-    ) {
+    ) -> Self {
         self.stage_results.push(StageResult {
             stage_name: stage_name.clone(),
             status: StageStatus::Failed,
@@ -142,10 +146,11 @@ impl PipelineRun {
             stage_name,
             error,
         });
+        self
     }
 
-    /// Mark the run as completed successfully.
-    pub fn complete(&mut self) {
+    /// Mark the run as completed successfully. Returns a new instance.
+    pub fn complete(mut self) -> Self {
         self.status = RunStatus::Succeeded;
         self.completed_at = Some(Utc::now());
         let total_ms = self.stage_results.iter().map(|r| r.duration_ms).sum();
@@ -155,10 +160,11 @@ impl PipelineRun {
             status: "succeeded".into(),
             total_duration_ms: total_ms,
         });
+        self
     }
 
-    /// Mark the run as failed.
-    pub fn fail(&mut self) {
+    /// Mark the run as failed. Returns a new instance.
+    pub fn fail(mut self) -> Self {
         self.status = RunStatus::Failed;
         self.completed_at = Some(Utc::now());
         let total_ms = self.stage_results.iter().map(|r| r.duration_ms).sum();
@@ -168,10 +174,11 @@ impl PipelineRun {
             status: "failed".into(),
             total_duration_ms: total_ms,
         });
+        self
     }
 
-    /// Trigger a rollback.
-    pub fn rollback(&mut self, reason: String, previous_vaid: Uuid) {
+    /// Trigger a rollback. Returns a new instance.
+    pub fn rollback(mut self, reason: String, previous_vaid: Uuid) -> Self {
         self.status = RunStatus::RolledBack;
         self.completed_at = Some(Utc::now());
         self.domain_events.push(PipelineEvent::RollbackTriggered {
@@ -179,6 +186,7 @@ impl PipelineRun {
             reason,
             previous_vaid,
         });
+        self
     }
 
     // --- Accessors ---
@@ -219,8 +227,10 @@ impl PipelineRun {
         self.completed_at
     }
 
-    pub fn take_events(&mut self) -> Vec<PipelineEvent> {
-        std::mem::take(&mut self.domain_events)
+    /// Drain and return all pending domain events.
+    pub fn take_events(mut self) -> (Self, Vec<PipelineEvent>) {
+        let events = std::mem::take(&mut self.domain_events);
+        (self, events)
     }
 }
 
@@ -241,56 +251,69 @@ mod tests {
     }
 
     #[test]
-    fn record_stage_success_adds_result() {
-        let mut run = PipelineRun::start(
+    fn record_stage_success_returns_new_instance() {
+        let run = PipelineRun::start(
             Uuid::new_v4(),
             "test".into(),
             Uuid::new_v4(),
             "manual".into(),
         );
-        run.record_stage_success("validate".into(), 150, serde_json::json!({"ok": true}));
+        let run = run.record_stage_success("validate".into(), 150, serde_json::json!({"ok": true}));
         assert_eq!(run.stage_results().len(), 1);
         assert_eq!(run.stage_results()[0].status, StageStatus::Succeeded);
     }
 
     #[test]
-    fn complete_marks_run_succeeded() {
-        let mut run = PipelineRun::start(
+    fn complete_returns_succeeded_instance() {
+        let run = PipelineRun::start(
             Uuid::new_v4(),
             "test".into(),
             Uuid::new_v4(),
             "manual".into(),
         );
-        run.record_stage_success("validate".into(), 100, serde_json::Value::Null);
-        run.complete();
+        let run = run.record_stage_success("validate".into(), 100, serde_json::Value::Null);
+        let run = run.complete();
         assert_eq!(run.status(), RunStatus::Succeeded);
         assert!(run.completed_at().is_some());
     }
 
     #[test]
-    fn fail_marks_run_failed() {
-        let mut run = PipelineRun::start(
+    fn fail_returns_failed_instance() {
+        let run = PipelineRun::start(
             Uuid::new_v4(),
             "test".into(),
             Uuid::new_v4(),
             "manual".into(),
         );
-        run.record_stage_failure("validate".into(), 50, "schema error".into());
-        run.fail();
+        let run = run.record_stage_failure("validate".into(), 50, "schema error".into());
+        let run = run.fail();
         assert_eq!(run.status(), RunStatus::Failed);
     }
 
     #[test]
-    fn events_are_collected() {
-        let mut run = PipelineRun::start(
+    fn rollback_returns_rolled_back_instance() {
+        let run = PipelineRun::start(
             Uuid::new_v4(),
             "test".into(),
             Uuid::new_v4(),
             "manual".into(),
         );
-        run.record_stage_success("validate".into(), 100, serde_json::Value::Null);
-        run.complete();
-        let events = run.take_events();
+        let run = run.rollback("drift threshold breached".into(), Uuid::new_v4());
+        assert_eq!(run.status(), RunStatus::RolledBack);
+        assert!(run.completed_at().is_some());
+    }
+
+    #[test]
+    fn take_events_returns_all_collected_events() {
+        let run = PipelineRun::start(
+            Uuid::new_v4(),
+            "test".into(),
+            Uuid::new_v4(),
+            "manual".into(),
+        );
+        let run = run.record_stage_success("validate".into(), 100, serde_json::Value::Null);
+        let run = run.complete();
+        let (_run, events) = run.take_events();
         assert_eq!(events.len(), 3); // started + stage_completed + run_completed
     }
 }

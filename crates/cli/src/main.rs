@@ -96,6 +96,16 @@ enum Commands {
         message: String,
     },
 
+    /// Deprecate a context artifact
+    Deprecate {
+        /// Artifact ID (UUID)
+        id: String,
+
+        /// Reason for deprecation
+        #[arg(short, long)]
+        reason: String,
+    },
+
     /// Search context artifacts
     Search {
         /// Search query
@@ -232,6 +242,16 @@ async fn main() -> anyhow::Result<()> {
             };
 
             let result = registry.create_version.execute(input).await?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+
+        Commands::Deprecate { id, reason } => {
+            let uuid: uuid::Uuid = id.parse().map_err(|_| anyhow::anyhow!("Invalid UUID"))?;
+            let input = contextops_registry::application::commands::deprecate_artifact::DeprecateArtifactInput {
+                artifact_id: uuid,
+                reason,
+            };
+            let result = registry.deprecate_artifact.execute(input).await?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
 

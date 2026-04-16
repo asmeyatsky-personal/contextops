@@ -93,7 +93,7 @@ impl RunPipelineCommand {
         };
 
         // Execute the pipeline DAG
-        let mut run = self.orchestrator.execute(&pipeline, stage_context).await?;
+        let run = self.orchestrator.execute(&pipeline, stage_context).await?;
 
         // Persist the run
         self.run_repo
@@ -101,11 +101,12 @@ impl RunPipelineCommand {
             .await
             .map_err(|e| DomainError::InvalidContent { reason: e.to_string() })?;
 
-        // Publish events
-        let events = run.take_events();
+        // Publish events (take_events consumes and returns new instance)
+        let run_id_str = run.id().to_string();
+        let (run, events) = run.take_events();
         let envelopes: Vec<_> = events
             .into_iter()
-            .map(|e| e.into_envelope(run.id().to_string()))
+            .map(|e| e.into_envelope(run_id_str.clone()))
             .collect();
         self.event_bus.publish(envelopes).await.ok();
 

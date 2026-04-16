@@ -1,4 +1,4 @@
-mod blast_radius;
+pub mod blast_radius;
 mod pipeline;
 mod pipeline_run;
 
