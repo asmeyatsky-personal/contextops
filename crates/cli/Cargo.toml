@@ -1,0 +1,28 @@
+[package]
+name = "contextops-cli"
+description = "ContextOps CLI — command-line interface for context management"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "contextops"
+path = "src/main.rs"
+
+[dependencies]
+contextops-domain = { workspace = true }
+contextops-registry = { workspace = true }
+contextops-pipeline = { workspace = true }
+contextops-mcp-server = { workspace = true }
+contextops-common = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

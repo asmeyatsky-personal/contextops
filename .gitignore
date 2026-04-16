@@ -1,0 +1,13 @@
+/target
+**/*.rs.bk
+Cargo.lock
+*.swp
+*.swo
+.DS_Store
+.env
+*.pem
+*.key
+
+# Source documents (confidential)
+*.docx
+*.pptx
